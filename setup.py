@@ -17,6 +17,7 @@ setup(
     long_description=read_file('README.md'),
     author='BitTorrent Inc.',
     author_email='live-eng@bittorrent.com',
+    package_data={'': ['data/bin/*']},
     packages=find_packages(),
     entry_points={
         'console_scripts': [
