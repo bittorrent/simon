@@ -1,0 +1,102 @@
+#!/usr/bin/env python
+
+import argparse
+import fnmatch
+import logging
+import os
+import subprocess
+import sys
+import textwrap
+
+from datetime import date
+
+
+def license_text(license):
+    if license == 'apache':
+        return textwrap.dedent('''\
+            Copyright {year} {owner}
+
+            Licensed under the Apache License, Version 2.0 (the "License");
+            you may not use this file except in compliance with the License.
+            You may obtain a copy of the License at
+
+               http://www.apache.org/licenses/LICENSE-2.0
+
+            Unless required by applicable law or agreed to in writing, software
+            distributed under the License is distributed on an "AS IS" BASIS,
+            WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+            See the License for the specific language governing permissions and
+            limitations under the License.
+        ''')
+
+
+def rstrip_lines(text):
+    return '\n'.join([line.rstrip() for line in text.splitlines()])
+
+
+def main(args):
+    parser = argparse.ArgumentParser(description='Manipulates licenses.')
+    parser.add_argument('action', choices=['check', 'apply'], help='the action to take')
+    parser.add_argument('path', nargs='?', default='.', help='the path to check')
+    parser.add_argument('-x', '--exclude', default=[], action='append', help='patterns to exclude')
+    parser.add_argument('--license', choices=['apache'], default='apache', help='the desired license')
+    parser.add_argument('--owner', default='BitTorrent Inc.', help='the copyright owner')
+    parser.add_argument('-v', '--verbose', action='store_true', help='enable verbose logging')
+    args = parser.parse_args(args)
+
+    logging.basicConfig(format='[%(levelname)s] %(message)s', level=logging.DEBUG if args.verbose else logging.INFO)
+
+    if os.path.isdir(args.path):
+        files = subprocess.check_output(['git', 'ls-files', args.path]).decode().splitlines()
+    else:
+        files = args.path
+
+    files = [file for file in files if not any([fnmatch.fnmatch(file, pattern) for pattern in args.exclude])]
+
+    valid_license_text = [
+        license_text(args.license).format(
+            year=year,
+            owner=args.owner
+        ) for year in range(2016, date.today().year + 1)
+    ]
+
+    returncode = 0
+
+    comment_formats = [
+        (
+            ['.h', '.hpp', '.hxx', '.ipp', '.c', '.cc', '.cpp'],
+            lambda x: '/**\n' + '\n'.join([('* ' + line).rstrip() for line in x.splitlines()]) + '\n*/\n'
+        )
+    ]
+
+    for file in files:
+        extension = os.path.splitext(file)[1]
+        comment_formatter = None
+        for format in comment_formats:
+            if extension in format[0]:
+                comment_formatter = format[1]
+
+        if comment_formatter is None:
+            continue
+
+        with open(file, 'r') as f:
+            contents = f.read()
+
+        rstripped = rstrip_lines(contents)
+
+        if not any([rstripped.startswith(comment_formatter(text)) for text in valid_license_text]):
+            if args.action == 'check':
+                logging.error('File does not contain valid license text: {}'.format(file))
+                returncode = 1
+            elif args.action == 'apply':
+                logging.info('Prepending license text to file: {}'.format(file))
+                with open(file, 'w') as f:
+                    f.write(comment_formatter(license_text(args.license).format(year=date.today().year, owner=args.owner)) + contents)
+
+    return returncode
+
+if __name__ == '__main__':
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except KeyboardInterrupt:
+        sys.exit(1)

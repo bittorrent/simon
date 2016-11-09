@@ -1,0 +1,12 @@
+#!/usr/bin/env python
+
+import os
+import sys
+
+if __name__ == '__main__':
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+    from simon.__main__ import main
+    try:
+        sys.exit(main(sys.argv))
+    except KeyboardInterrupt:
+        sys.exit(1)

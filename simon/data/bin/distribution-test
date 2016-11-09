@@ -1,0 +1,199 @@
+#!/usr/bin/env python
+
+import argparse
+import logging
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tarfile
+import tempfile
+import zipfile
+
+
+class Distribution:
+    def __init__(self, path):
+        self.path = path
+
+    def __enter__(self):
+        if not os.path.exists(self.path):
+            raise RuntimeError('the distribution path does not exist')
+
+        if os.path.isdir(self.path):
+            self.extracted_path = self.path
+            return self
+
+        self.extracted_path = tempfile.mkdtemp()
+
+        try:
+            with tarfile.open(self.path, 'r') as f:
+                f.extractall(self.extracted_path)
+            return self
+        except tarfile.ReadError:
+            pass
+
+        try:
+            with zipfile.ZipFile(self.path, 'r') as f:
+                f.extractall(self.extracted_path)
+            return self
+        except zipfile.BadZipfile:
+            pass
+
+        shutil.copy2(self.path, self.extracted_path)
+        return self
+
+    def __exit__(self, etype, value, traceback):
+        if self.extracted_path and self.extracted_path != self.path:
+            shutil.rmtree(self.extracted_path)
+
+    def files_present(self, extensions=None):
+        files = [os.path.join(root, file) for root, dirs, files in os.walk(self.extracted_path) for file in files]
+        if extensions:
+            files = filter(lambda f: os.path.splitext(f)[1] in extensions, files)
+        return files
+
+    def code_files_present(self):
+        ret = []
+        for file in self.files_present(['', '.so', '.a', '.dylib']):
+            if os.path.splitext(file)[1] == '' and os.stat(file).st_mode & 0111 == 0:
+                continue
+            ret.append(file)
+        return ret
+
+    def test_extensions(self, expected):
+        present = set([os.path.splitext(f)[1] for f in self.files_present()])
+        logging.debug('Extensions present: {}'.format(present))
+        if expected - present:
+            logging.error('Extensions expected, but not present: {}'.format(expected - present))
+        if present - expected:
+            logging.error('Extensions present, but not expected: {}'.format(present - expected))
+        return present == expected
+
+    def test_string(self, string, expected=True):
+        process = subprocess.Popen(['grep', '-r', string, self.extracted_path], stdout=subprocess.PIPE)
+        stdout, stderr = process.communicate()
+        present = (process.returncode == 0)
+        if present:
+            formatted = stdout.decode().strip().replace('\n', '\n    ').replace(self.extracted_path + os.path.sep, '')
+            logging.debug('String \'{}\' found:\n    {}'.format(string, formatted))
+        if present and not expected:
+            logging.error('String \'{}\' present, but not expected.'.format(string))
+        if not present and expected:
+            logging.error('String \'{}\' expected, but not present.'.format(string))
+        return present == expected
+
+    def test_symbol(self, symbol, expected=True):
+        present = False
+        expression = re.compile(symbol)
+        for file in self.code_files_present():
+            symbols = [line.split()[0] for line in subprocess.check_output(['nm', '-P', file], stderr=subprocess.STDOUT).decode().splitlines() if line]
+            for test in symbols:
+                if re.match(expression, test):
+                    logging.debug('Symbol \'{}\' found in {}'.format(test, file))
+                    present = True
+                    break
+        if present and not expected:
+            logging.error('Symbol \'{}\' present, but not expected.'.format(symbol))
+        if not present and expected:
+            logging.error('Symbol \'{}\' expected, but not present.'.format(symbol))
+        return present == expected
+
+    def test_dynamic_symbol(self, symbol, expected=True):
+        present = False
+        expression = re.compile(symbol)
+        for file in self.files_present(['.so', '.dylib']):
+            symbols = [line.split()[0] for line in subprocess.check_output(['nm', '-DP', file], stderr=subprocess.STDOUT).decode().splitlines() if line]
+            for test in symbols:
+                if re.match(expression, test):
+                    logging.debug('Dynamic symbol \'{}\' found in {}'.format(test, file))
+                    present = True
+                    break
+        if present and not expected:
+            logging.error('Dynamic symbol \'{}\' present, but not expected.'.format(symbol))
+        if not present and expected:
+            logging.error('Dynamic symbol \'{}\' expected, but not present.'.format(symbol))
+        return present == expected
+
+    def test_embedded_bitcode(self, expected=True):
+        ret = True
+        for file in self.code_files_present():
+            segments = subprocess.check_output(['otool', '-vl', file], stderr=subprocess.STDOUT).decode()
+            if '__bundle' not in segments:
+                present = False
+            else:
+                xar_toc = subprocess.check_output(['otool', '-v', '-s', '__LLVM', '__bundle', file], stderr=subprocess.STDOUT).decode()
+                present = '<file-type>Bitcode</file-type>' in xar_toc
+            if present:
+                logging.debug('Embedded bitcode found in {}'.format(file))
+                if not expected:
+                    logging.error('Embedded bitcode present in {}, but not expected.'.format(file))
+                    ret = False
+            else:
+                logging.debug('Embedded bitcode not found in {}'.format(file))
+                if expected:
+                    logging.error('Embedded bitcode expected, but not present in {}'.format(file))
+                    ret = False
+        return ret
+
+
+def main(args):
+    parser = argparse.ArgumentParser(description='Tests various aspects of a distribution.')
+    parser.add_argument('--extensions', help='expects the extensions present to match this list exactly')
+    parser.add_argument('--string', action='append', help='expects this string to be present')
+    parser.add_argument('--no-string', action='append', help='expects this string to be absent')
+    parser.add_argument('--symbol', action='append', help='expects this symbol to be present')
+    parser.add_argument('--no-symbol', action='append', help='expects this symbol to be absent')
+    parser.add_argument('--dynamic-symbol', action='append', help='expects this dynamic symbol to be present')
+    parser.add_argument('--no-dynamic-symbol', action='append', help='expects this dynamic symbol to be absent')
+    parser.add_argument('--embedded-bitcode', action='store_true', help='expects embedded bitcode to be present')
+    parser.add_argument('--no-embedded-bitcode', action='store_true', help='expects embedded bitcode to be absent')
+    parser.add_argument('-v', '--verbose', action='store_true', help='enable verbose logging')
+    parser.add_argument('distribution', help='the distribution to test')
+    args = parser.parse_args(args)
+
+    logging.basicConfig(format='[%(levelname)s] %(message)s', level=logging.DEBUG if args.verbose else logging.INFO)
+
+    results = []
+
+    with Distribution(args.distribution) as distribution:
+        if args.extensions is not None:
+            results.append(distribution.test_extensions(set(args.extensions.split(','))))
+
+        if args.string:
+            for string in args.string:
+                results.append(distribution.test_string(string))
+
+        if args.no_string:
+            for string in args.no_string:
+                results.append(distribution.test_string(string, False))
+
+        if args.symbol:
+            for symbol in args.symbol:
+                results.append(distribution.test_symbol(symbol))
+
+        if args.no_symbol:
+            for symbol in args.no_symbol:
+                results.append(distribution.test_symbol(symbol, False))
+
+        if args.dynamic_symbol:
+            for dynamic_symbol in args.dynamic_symbol:
+                results.append(distribution.test_dynamic_symbol(dynamic_symbol))
+
+        if args.no_dynamic_symbol:
+            for dynamic_symbol in args.no_dynamic_symbol:
+                results.append(distribution.test_dynamic_symbol(dynamic_symbol, False))
+
+        if args.embedded_bitcode:
+            results.append(distribution.test_embedded_bitcode())
+
+        if args.no_embedded_bitcode:
+            results.append(distribution.test_embedded_bitcode(False))
+
+    return not all(results)
+
+if __name__ == '__main__':
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except KeyboardInterrupt:
+        sys.exit(1)
