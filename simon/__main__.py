@@ -35,8 +35,8 @@ def main(args=sys.argv):
         epilog="""available commands:
 {}
 
-Use '{} help <command>' to get help for a specific command.
-            """.format(command_listing, os.path.basename(sys.argv[0])))
+Use '{} help <command>' to get help for a specific command.""".format(
+            command_listing, os.path.basename(sys.argv[0])))
     parser.add_argument('command', help='see below')
     parser.add_argument('args', nargs=argparse.REMAINDER)
     parameters = parser.parse_args(args[1:])
