@@ -23,5 +23,10 @@ setup(
         'console_scripts': [
             'simon=simon.__main__:main'
         ]
-    }
+    },
+    install_requires=[
+        'appdirs',
+        'pyyaml',
+        'jinja2',
+    ]
 )
