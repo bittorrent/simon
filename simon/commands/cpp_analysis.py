@@ -30,6 +30,7 @@ class CPPAnalysisCommand(Command):
             description='Statically analyzes C++.'
         )
         self.__arg_parser.add_argument('build_command', nargs=argparse.REMAINDER)
+        self.__arg_parser.add_argument('-o', '--report-dir', default=None, help='output directory for reports')
 
     def name(self):
         return 'c++-analysis'
@@ -55,6 +56,7 @@ class CPPAnalysisCommand(Command):
         return subprocess.call(
             [scan_build, '--status-bugs', '--use-analyzer={}'.format(analyzer)] +
             ' '.join(['-enable-checker ' + checker for checker in checkers]).split() +
+            (['-o', parameters.report_dir] if parameters.report_dir else []) +
             parameters.build_command
         )
 
