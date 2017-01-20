@@ -22,7 +22,7 @@ simon license operates only on git-tracked files
 
   $ cat main.cpp
   /**
-  * Copyright 2016 BitTorrent Inc.
+  * Copyright 2017 BitTorrent Inc.
   *
   * Licensed under the Apache License, Version 2.0 (the "License");
   * you may not use this file except in compliance with the License.
