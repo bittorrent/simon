@@ -64,7 +64,7 @@ def main(args):
 
     comment_formats = [
         (
-            ['.h', '.hpp', '.hxx', '.ipp', '.c', '.cc', '.cpp'],
+            ['.h', '.hpp', '.hxx', '.ipp', '.c', '.cc', '.cpp', '.go', '.java'],
             lambda x: '/**\n' + '\n'.join([('* ' + line).rstrip() for line in x.splitlines()]) + '\n*/\n'
         )
     ]
