@@ -34,8 +34,18 @@ class Distribution:
             pass
 
         try:
-            with zipfile.ZipFile(self.path, 'r') as f:
-                f.extractall(self.extracted_path)
+            # Python's zipfile doesn't preserve file attributes, small workaround
+            # See https://www.burgundywall.com/post/preserving-file-perms-with-python-zipfile-module
+            # XXX: This will probably fail on Windows
+            def extract_file(zf, info, extract_dir):
+                zf.extract(info.filename, path=extract_dir)
+                out_path = os.path.join(extract_dir, info.filename)
+                perm = info.external_attr >> 16L
+                os.chmod(out_path, perm)
+
+            with zipfile.ZipFile(self.path, 'r') as zf:
+                for info in zf.infolist():
+                    extract_file(zf, info, self.extracted_path)
             return self
         except zipfile.BadZipfile:
             pass
